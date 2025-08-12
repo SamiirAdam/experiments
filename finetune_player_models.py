@@ -18,6 +18,8 @@
 
 # pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.0
 
+#python -c "import torch,sys;print('python:',sys.executable);print('torch:',torch.version);print('hip:',torch.version.hip)" 
+
 import os, math, json, glob, time, copy, argparse, random
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
