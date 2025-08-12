@@ -29,7 +29,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, random_split
-from torch.serialization import add_safe_globals, safe_globals
 
 try:
     from model import TokenViT
@@ -67,21 +66,12 @@ class SinglePTDataset(Dataset):
         self.has_masks = ("legal_mask_from" in r0) and ("legal_mask_dest" in r0)
 
     def _safe_load_pt(self, path: str):
-        # Preferred path for trusted local datasets
+        # Plain load (unsafe for untrusted files). Faster & simpler.
         try:
-            return torch.load(path, map_location="cpu", weights_only=False)
-        except TypeError:
-            # Older torch without weights_only kw
             return torch.load(path, map_location="cpu")
-        except Exception as e:
-            # Allowlist numpy reconstruct if needed (PyTorch 2.6 safe-serialization)
-            try:
-                reconstruct = getattr(np.core.multiarray, "_reconstruct")
-                add_safe_globals([reconstruct])
-                with safe_globals([reconstruct]):
-                    return torch.load(path, map_location="cpu", weights_only=True)
-            except Exception as e2:
-                raise e2
+        except TypeError:
+            # (Very old Torch) fallback signature
+            return torch.load(path, map_location="cpu")
 
     def __len__(self): return len(self.records)
     def __getitem__(self, idx):
