@@ -256,14 +256,52 @@ def load_base_checkpoint(base_ckpt_path: str, model: nn.Module) -> Dict[str, Any
     state = _resize_positional_embed(state, model, key_model="pos")
     return {"state": state, "config": base.get("config", {})}
 
+# def train_one_epoch(model, ema, loader, opt, scaler, device, label_smoothing: float = 0.0,
+#                     grad_clip: float = 1.0, warmup_steps: int = 0, step_idx_start: int = 0):
+#     model.train()
+#     total_loss, total_batches = 0.0, 0
+#     ce_kwargs = {"label_smoothing": label_smoothing} if label_smoothing > 0 else {}
+#     step_idx = step_idx_start
+#     for batch in loader:
+#         step_idx += 1
+#         if len(batch) == 6:
+#             x, pad, y_from, y_to, legal_from, legal_to = batch
+#         else:
+#             raise RuntimeError("Dataset must include legal_mask_from/dest for masked CE.")
+#         x, pad, y_from, y_to = to_device((x, pad, y_from, y_to), device)
+#         legal_from, legal_to = to_device((legal_from, legal_to), device)
+
+#         tgt_from = onehot_to_index(y_from)
+#         tgt_to   = onehot_to_index(y_to)
+
+#         with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
+#             lf, lt = forward_model(model, x, pad)
+#             lf = mask_logits_with_legal(lf, legal_from)
+#             lt = mask_logits_with_legal(lt, legal_to)
+#             loss = F.cross_entropy(lf, tgt_from, **ce_kwargs) + F.cross_entropy(lt, tgt_to, **ce_kwargs)
+
+#         opt.zero_grad(set_to_none=True)
+#         scaler.scale(loss).backward()
+#         if grad_clip: 
+#             scaler.unscale_(opt); torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+#         if warmup_steps and step_idx <= warmup_steps:
+#             for pg in opt.param_groups: pg['lr'] = pg['lr'] * step_idx / warmup_steps
+#         scaler.step(opt); scaler.update()
+#         if ema is not None: ema.update(model)
+
+#         total_loss += loss.item(); total_batches += 1
+#     return total_loss / max(total_batches, 1), step_idx
+
 def train_one_epoch(model, ema, loader, opt, scaler, device, label_smoothing: float = 0.0,
-                    grad_clip: float = 1.0, warmup_steps: int = 0, step_idx_start: int = 0):
+                    grad_clip: float = 1.0, warmup_steps: int = 0, step_idx_start: int = 0,
+                    grad_accum_steps: int = 2):
     model.train()
-    total_loss, total_batches = 0.0, 0
+    opt.zero_grad(set_to_none=True)
+    total_loss, total_updates = 0.0, 0
     ce_kwargs = {"label_smoothing": label_smoothing} if label_smoothing > 0 else {}
-    step_idx = step_idx_start
-    for batch in loader:
-        step_idx += 1
+    step_idx = step_idx_start  # counts optimizer update steps
+    micro = 0
+    for micro, batch in enumerate(loader):
         if len(batch) == 6:
             x, pad, y_from, y_to, legal_from, legal_to = batch
         else:
@@ -278,19 +316,32 @@ def train_one_epoch(model, ema, loader, opt, scaler, device, label_smoothing: fl
             lf, lt = forward_model(model, x, pad)
             lf = mask_logits_with_legal(lf, legal_from)
             lt = mask_logits_with_legal(lt, legal_to)
-            loss = F.cross_entropy(lf, tgt_from, **ce_kwargs) + F.cross_entropy(lt, tgt_to, **ce_kwargs)
+            loss = (F.cross_entropy(lf, tgt_from, **ce_kwargs) +
+                    F.cross_entropy(lt, tgt_to, **ce_kwargs))
+            loss = loss / grad_accum_steps  # scale for accumulation
 
-        opt.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
-        if grad_clip: 
-            scaler.unscale_(opt); torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        if warmup_steps and step_idx <= warmup_steps:
-            for pg in opt.param_groups: pg['lr'] = pg['lr'] * step_idx / warmup_steps
-        scaler.step(opt); scaler.update()
-        if ema is not None: ema.update(model)
 
-        total_loss += loss.item(); total_batches += 1
-    return total_loss / max(total_batches, 1), step_idx
+        do_update = ((micro + 1) % grad_accum_steps == 0) or (micro + 1 == len(loader))
+        if do_update:
+            if grad_clip:
+                scaler.unscale_(opt)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            # Warmup based on update steps
+            if warmup_steps and (step_idx + 1) <= warmup_steps:
+                warm_scale = (step_idx + 1) / warmup_steps
+                for pg in opt.param_groups:
+                    pg['lr'] = pg['lr_initial'] * warm_scale if 'lr_initial' in pg else pg['lr']
+            scaler.step(opt)
+            scaler.update()
+            opt.zero_grad(set_to_none=True)
+            if ema is not None:
+                ema.update(model)
+            step_idx += 1
+            total_loss += loss.item() * grad_accum_steps
+            total_updates += 1
+    avg_loss = total_loss / max(total_updates, 1)
+    return avg_loss, step_idx
 
 @torch.no_grad()
 def evaluate(model, loader, device, use_ema=None):
@@ -318,7 +369,7 @@ def main():
     parser.add_argument("--base_ckpt", type=str, required=True)
     parser.add_argument("--out_dir", type=str, default="./outputs_players")
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--val_split", type=float, default=0.1)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
@@ -446,7 +497,7 @@ def main():
             train_loss, global_step = train_one_epoch(model, ema, train_loader, opt, scaler, device,
                                                       label_smoothing=args.label_smoothing,
                                                       grad_clip=args.grad_clip, warmup_steps=args.warmup_steps,
-                                                      step_idx_start=global_step)
+                                                      step_idx_start=global_step, grad_accum_steps=2)
             scheduler.step()
             val_stats = evaluate(model, val_loader, device, use_ema=ema)
 
