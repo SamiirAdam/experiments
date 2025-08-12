@@ -5,6 +5,13 @@
 #   * Prefer weights_only=False for trusted local data
 #   * Fall back to safe allowlisting of numpy._core.multiarray._reconstruct
 # - Keeps positional-embed resize + head remap + holdout support from previous version
+
+# python finetune_player_models.py \                                                                                                                                   thesis 18:54:57
+#   --data_dir ./data \
+#   --base_ckpt ./best_vit_amd.pth \
+#   --max_tokens 256 \
+#   --holdout_last_n 20000 --ema
+
 import os, math, json, glob, time, copy, argparse, random
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
