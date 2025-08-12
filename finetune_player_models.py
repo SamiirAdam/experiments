@@ -12,6 +12,11 @@
 #   --max_tokens 256 \
 #   --holdout_last_n 20000 --ema
 
+# pip install --upgrade pip
+# pip install --upgrade "torch==2.6.0" "torchvision==0.21.0" "torchaudio==2.6.0" --index-url https://download.pytorch.org/whl/cu121
+
+# pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.0
+
 import os, math, json, glob, time, copy, argparse, random
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
