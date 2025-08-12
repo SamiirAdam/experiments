@@ -390,6 +390,33 @@ def main():
     parser.add_argument("--max_tokens", type=int, default=256, help="Target sequence length for model pos embeddings")
     parser.add_argument("--holdout_last_n", type=int, default=0, help="Leave last N examples untouched per player")
     args = parser.parse_args()
+    
+    os.environ['PYTORCH_DISABLE_CUDNN_BATCH_NORM'] = '1'
+    os.environ['TORCH_COMPILE_DEBUG'] = '0' 
+
+    import torch._dynamo
+    torch._dynamo.config.suppress_errors = True 
+
+    if torch.cuda.is_available() and "AMD" in torch.cuda.get_device_name():
+        # Enable AMD-specific optimizations
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.deterministic = False
+        torch.backends.cudnn.benchmark = True
+        
+        # AMD memory management
+        torch.cuda.empty_cache()
+        
+        # Set memory fraction to use most of the 24GB
+        torch.cuda.set_per_process_memory_fraction(0.95)
+        
+        # Enable AMD's optimized attention if available
+        try:
+            torch.backends.cuda.enable_flash_sdp(True)
+            torch.backends.cuda.enable_mem_efficient_sdp(True)
+            torch.backends.cuda.enable_math_sdp(True)
+        except:
+            pass
 
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
