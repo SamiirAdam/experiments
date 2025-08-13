@@ -402,7 +402,7 @@ def main():
     parser.add_argument("--data_dir", type=str, required=True)
     parser.add_argument("--base_ckpt", type=str, required=True)
     parser.add_argument("--out_dir", type=str, default="./outputs_players")
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=7)
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--val_split", type=float, default=0.1)
     parser.add_argument("--lr", type=float, default=3e-4)
