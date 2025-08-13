@@ -1,2 +1,8 @@
 expand.ipynb
 data/
+outputs_players/.DS_Store
+*.pt
+*.csv
+*.pgn
+*.json
+*.DS_Store
